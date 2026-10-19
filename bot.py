@@ -30,8 +30,9 @@ _SSL_FALLBACK_WARNED = False
 
 def _open(url: str, data: bytes, timeout: int):
     global _SSL_FALLBACK_WARNED
+    headers = {"Content-Type": "application/json"}
     try:
-        return urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=timeout)
+        return urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=timeout)
     except urllib.error.URLError as e:
         if "CERTIFICATE" not in str(e).upper():
             raise
@@ -41,7 +42,7 @@ def _open(url: str, data: bytes, timeout: int):
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        return urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=timeout, context=ctx)
+        return urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=timeout, context=ctx)
 
 HELP = (
     "⚡ BaranFlash V1 — محرك ذكاء محلي بهندسة MoE\n\n"
@@ -162,12 +163,16 @@ def handle_update(flash: BaranFlash, st: Dict[str, Any], upd: Dict[str, Any]) ->
         return
     tg("sendChatAction", {"chat_id": cid, "action": "typing"})
     out = flash.ask(text)
-    u["asks"] = u.get("asks", 0) + (0 if active else 1)
-    save_state(st)
     r = out["router"]
     reply = (f"🧠 [{r['primary']}] ({', '.join(n for n, _ in r['experts'])}) "
              f"cache={out['cache']} · {out['total_ms']}ms\n\n{out['answer'][:3500]}")
-    tg("sendMessage", {"chat_id": cid, "text": reply})
+    try:
+        tg("sendMessage", {"chat_id": cid, "text": reply})
+    except Exception as e:
+        print("reply send failed:", str(e)[:120])
+        return  # quota not consumed when the reply never arrived
+    u["asks"] = u.get("asks", 0) + (0 if active else 1)
+    save_state(st)
 
 
 def main() -> None:
@@ -178,25 +183,38 @@ def main() -> None:
     st = load_state()
     print(f"⚡ BaranFlash bot polling… (free limit {config.FREE_LIMIT}, admin {config.ADMIN_ID})")
     print(config.OWNER_CREDIT)
-    while True:
-        try:
-            res = tg("getUpdates", {"offset": st.get("offset", 0) + 1, "timeout": 30}, timeout=45)
-            for upd in res.get("result", []):
-                st["offset"] = upd["update_id"]
-                save_state(st)
-                try:
-                    handle_update(flash, st, upd)
-                except urllib.error.HTTPError as e:
+    try:
+        while True:
+            try:
+                res = tg("getUpdates", {"offset": st.get("offset", 0) + 1, "timeout": 30}, timeout=45)
+                for upd in res.get("result", []):
+                    st["offset"] = upd["update_id"]
+                    save_state(st)
                     try:
-                        detail = e.read().decode("utf-8", "ignore")[:220]
-                    except Exception:
-                        detail = str(e)
-                    print("handler HTTPError:", detail)
-                except Exception as e:
-                    print("handler error:", str(e)[:200])
-        except Exception as e:
-            print("poll error:", str(e)[:120])
-            time.sleep(3)
+                        handle_update(flash, st, upd)
+                    except urllib.error.HTTPError as e:
+                        try:
+                            detail = e.read().decode("utf-8", "ignore")[:220]
+                        except Exception:
+                            detail = str(e)
+                        print("handler HTTPError:", detail)
+                    except Exception as e:
+                        print("handler error:", str(e)[:200])
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = e.read().decode("utf-8", "ignore")[:150]
+                except Exception:
+                    pass
+                print(f"poll error: {e} {detail}")
+                if "409" in str(e):
+                    print("⚠️ 409 Conflict — another bot instance is polling with this token! (kill duplicates)")
+                time.sleep(3)
+            except Exception as e:
+                print("poll error:", str(e)[:140])
+                time.sleep(3)
+    except KeyboardInterrupt:
+        print("· stopped by hand — PM2 users: use `pm2 stop baranflash-bot`")
 
 
 if __name__ == "__main__":
