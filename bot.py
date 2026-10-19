@@ -44,7 +44,7 @@ def _open(url: str, data: bytes, timeout: int):
         return urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=timeout, context=ctx)
 
 HELP = (
-    "⚡ *BaranFlash V1* — محرك ذكاء محلي بهندسة MoE\n\n"
+    "⚡ BaranFlash V1 — محرك ذكاء محلي بهندسة MoE\n\n"
     "• أرسل مستنداً (txt/md/csv/json/log/py/js/html) ← يُفهرس في نافذة السياق\n"
     "• أرسل صورة ← يُحلّل ويُفهرس (خبير الرؤية)\n"
     "• اكتب سؤالك ← موجّه MoE يختار الخبير المناسب ويجيب مع الاستشهادات\n\n"
@@ -97,7 +97,7 @@ def handle_update(flash: BaranFlash, st: Dict[str, Any], upd: Dict[str, Any]) ->
     u, active = user_quota(st, uid)
 
     if text.startswith("/start") or text.startswith("/help"):
-        tg("sendMessage", {"chat_id": cid, "text": HELP, "parse_mode": "Markdown"})
+        tg("sendMessage", {"chat_id": cid, "text": HELP})
         return
     if text.startswith("/stats"):
         tg("sendMessage", {"chat_id": cid, "text": json.dumps(flash.stats(), ensure_ascii=False, indent=2)})
@@ -186,8 +186,14 @@ def main() -> None:
                 save_state(st)
                 try:
                     handle_update(flash, st, upd)
+                except urllib.error.HTTPError as e:
+                    try:
+                        detail = e.read().decode("utf-8", "ignore")[:220]
+                    except Exception:
+                        detail = str(e)
+                    print("handler HTTPError:", detail)
                 except Exception as e:
-                    print("handler error:", e)
+                    print("handler error:", str(e)[:200])
         except Exception as e:
             print("poll error:", str(e)[:120])
             time.sleep(3)
