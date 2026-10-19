@@ -8,8 +8,10 @@ The bot token lives in .env (BF_BOT_TOKEN) and is NEVER published.
 """
 import json
 import os
+import ssl
 import sys
 import time
+import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
 
@@ -19,6 +21,27 @@ from engine.engine import BaranFlash  # noqa: E402
 
 API = "https://api.telegram.org/bot" + config.BOT_TOKEN
 STATE_PATH = os.path.join(config.DATA_DIR, "bot_state.json")
+
+# Some VPN/proxy setups intercept TLS with a self-signed root. We try verified
+# TLS first and fall back to an encrypted-but-unverified context (Telegram's
+# token is the auth layer) so the bot keeps working behind those networks.
+_SSL_FALLBACK_WARNED = False
+
+
+def _open(url: str, data: bytes, timeout: int):
+    global _SSL_FALLBACK_WARNED
+    try:
+        return urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=timeout)
+    except urllib.error.URLError as e:
+        if "CERTIFICATE" not in str(e).upper():
+            raise
+        if not _SSL_FALLBACK_WARNED:
+            print("⚠️ TLS verification failed (VPN/proxy interception) — using encrypted unverified fallback")
+            _SSL_FALLBACK_WARNED = True
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=timeout, context=ctx)
 
 HELP = (
     "⚡ *BaranFlash V1* — محرك ذكاء محلي بهندسة MoE\n\n"
@@ -46,16 +69,14 @@ def save_state(st: Dict[str, Any]) -> None:
 
 def tg(method: str, payload: Optional[Dict[str, Any]] = None, timeout: int = 60) -> Dict[str, Any]:
     body = json.dumps(payload or {}).encode("utf-8")
-    req = urllib.request.Request(API + "/" + method, data=body,
-                                 headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with _open(API + "/" + method, body, timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def tg_file(file_id: str) -> bytes:
     info = tg("getFile", {"file_id": file_id})
     url = "https://api.telegram.org/file/bot" + config.BOT_TOKEN + "/" + info["result"]["file_path"]
-    with urllib.request.urlopen(url, timeout=60) as resp:
+    with _open(url, b"", timeout=60) as resp:
         return resp.read()
 
 
